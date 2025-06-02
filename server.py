@@ -234,6 +234,6 @@ if __name__ == "__main__":
     uvicorn.run(
         "server:app",
         host="0.0.0.0",
-        port=int(os.getenv("PORT", 8000)),
+        port=int(os.getenv("PORT", 8011)),
         reload=True,  # disable reload=True if you don’t need hot-reload
     )

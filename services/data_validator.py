@@ -13,27 +13,74 @@ class InvoiceDataValidator:
         Validate and clean invoice data
         Returns: (cleaned_data, errors, warnings)
         """
+        print(f"🔍 [Validator] Input: {invoice_data}")
+        
         self.errors = []
         self.warnings = []
         
         cleaned_data = {}
         
+        # First, flatten the nested LLM data structure
+        flattened_data = self._flatten_llm_data(invoice_data)
+        print(f"🔍 [Validator] Flattened: {flattened_data}")
+        
         # Validate supplier information
-        cleaned_data.update(self._validate_supplier_info(invoice_data))
+        cleaned_data.update(self._validate_supplier_info(flattened_data))
         
         # Validate financial data
-        cleaned_data.update(self._validate_financial_data(invoice_data))
+        cleaned_data.update(self._validate_financial_data(flattened_data))
         
         # Validate dates
-        cleaned_data.update(self._validate_dates(invoice_data))
+        cleaned_data.update(self._validate_dates(flattened_data))
         
         # Validate contact information
-        cleaned_data.update(self._validate_contact_info(invoice_data))
+        cleaned_data.update(self._validate_contact_info(flattened_data))
         
         # Cross-validate financial calculations
         self._cross_validate_amounts(cleaned_data)
         
+        print(f"🔍 [Validator] Output: {cleaned_data}")
+        print(f"🔍 [Validator] Errors: {self.errors}")
+        print(f"🔍 [Validator] Warnings: {self.warnings}")
+        
         return cleaned_data, self.errors, self.warnings
+    
+    def _flatten_llm_data(self, data: Dict[str, Any]) -> Dict[str, Any]:
+        """Convert nested LLM schema to flat structure for validation"""
+        flattened = {}
+        
+        # Handle nested supplier data
+        supplier = data.get("supplier", {})
+        if isinstance(supplier, dict):
+            flattened["supplier_name"] = supplier.get("name")
+            flattened["supplier_address"] = supplier.get("address") 
+            flattened["supplier_email"] = supplier.get("email")
+            flattened["supplier_phone_number"] = supplier.get("phone_number")
+            flattened["supplier_vat_number"] = supplier.get("vat_number")
+            flattened["supplier_website"] = supplier.get("website")
+        
+        # Map LLM field names to validator field names
+        field_mapping = {
+            "invoice_date": "expense_date",  # invoice_date -> expense_date
+            "invoice_number": "invoice_number",
+            "currency": "currency", 
+            "total_net": "total_net",
+            "total_tax": "total_tax",
+            "total_amount_incl_tax": "total_amount",  # total_amount_incl_tax -> total_amount
+            "total_amount": "total_amount"  # Also handle if already named total_amount
+        }
+        
+        # Copy mapped fields
+        for llm_field, validator_field in field_mapping.items():
+            if llm_field in data:
+                flattened[validator_field] = data[llm_field]
+        
+        # Copy any other fields directly
+        for key, value in data.items():
+            if key not in ["supplier"] and key not in field_mapping:
+                flattened[key] = value
+        
+        return flattened
     
     def _validate_supplier_info(self, data: Dict[str, Any]) -> Dict[str, Any]:
         """Validate supplier information"""
@@ -86,6 +133,10 @@ class InvoiceDataValidator:
                 self.warnings.append("Currency code truncated")
                 currency = currency[:10]
             result["currency"] = currency
+        else:
+            # Default currency if not provided
+            result["currency"] = "USD"
+            self.warnings.append("Currency not provided, defaulting to USD")
         
         # Validate amounts
         amounts = ["total_net", "total_tax", "total_amount"]
@@ -93,7 +144,7 @@ class InvoiceDataValidator:
             amount = self._validate_amount(data.get(amount_field))
             if amount is not None:
                 result[amount_field] = float(amount)
-            elif data.get(amount_field):
+            elif data.get(amount_field) is not None:
                 self.warnings.append(f"Invalid {amount_field}: {data.get(amount_field)}")
         
         return result
@@ -147,6 +198,8 @@ class InvoiceDataValidator:
                 self.warnings.append("Invoice number truncated")
                 invoice_number = invoice_number[:100]
             result["invoice_number"] = invoice_number
+        else:
+            self.warnings.append("Invoice number is missing")
         
         return result
     
@@ -215,7 +268,8 @@ class InvoiceDataValidator:
             return date_str
         
         formats = [
-            "%Y-%m-%d", "%d/%m/%Y", "%m/%d/%Y", "%d-%m-%Y",
+            "%d/%m/%Y",  # DD/MM/YYYY (LLM format) - put this first!
+            "%Y-%m-%d", "%m/%d/%Y", "%d-%m-%Y",
             "%Y/%m/%d", "%B %d, %Y", "%d %B %Y", "%d.%m.%Y"
         ]
         
@@ -229,11 +283,16 @@ class InvoiceDataValidator:
     
     def _validate_email(self, email: str) -> bool:
         """Validate email format"""
+        if not email:
+            return False
         pattern = r'^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$'
         return re.match(pattern, email) is not None
     
     def _validate_phone(self, phone: str) -> str:
         """Validate and clean phone number"""
+        if not phone:
+            return None
+            
         # Remove all non-digit characters except + at the beginning
         cleaned = re.sub(r'[^\d+]', '', phone)
         if cleaned.startswith('+'):
@@ -250,6 +309,9 @@ class InvoiceDataValidator:
     
     def _validate_vat_number(self, vat: str) -> str:
         """Basic VAT number validation"""
+        if not vat:
+            return None
+            
         # Remove spaces and convert to uppercase
         cleaned = re.sub(r'\s+', '', vat.upper())
         
@@ -265,6 +327,9 @@ class InvoiceDataValidator:
     
     def _validate_website(self, website: str) -> str:
         """Validate and clean website URL"""
+        if not website:
+            return None
+            
         if not website.startswith(('http://', 'https://')):
             website = 'https://' + website
         
